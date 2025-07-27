@@ -87,15 +87,30 @@ def extract_priority(text):
     return "Medium"
 
 def extract_date(text):
+    text = text.strip()
+    today = datetime.date.today()
+    
+    # First try: find relative clues
+    result = search_dates(text, settings={'RELATIVE_BASE': datetime.datetime.now()})
+    if result:
+        for matched_text, parsed_dt in result:
+            if matched_text.lower() in ['wednesday', 'monday', 'tuesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                # Default to previous weekday if ambiguous
+                weekday_num = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].index(matched_text.lower())
+                days_ago = (today.weekday() - weekday_num) % 7 or 7
+                resolved_date = today - datetime.timedelta(days=days_ago)
+                return str(resolved_date)
+            else:
+                return str(parsed_dt.date())
+    
+    # Fallback: spaCy NER (less reliable for weekdays)
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == "DATE":
             parsed = dateparser.parse(ent.text)
             if parsed:
                 return str(parsed.date())
-    result = search_dates(text)
-    if result:
-        return str(result[0][1].date())
+
     return None
 
 def parse_form(text):
