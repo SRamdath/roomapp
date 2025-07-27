@@ -4,6 +4,13 @@ import re
 import dateparser
 from dateparser.search import search_dates
 
+import spacy.cli
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    spacy.cli.download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
+
 nlp = spacy.load("en_core_web_sm")
 
 # Task and priority definitions
