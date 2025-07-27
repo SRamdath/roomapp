@@ -96,7 +96,6 @@ def parse_form(text):
     }
 
 # --- Streamlit Interface ---
-# --- Streamlit Interface (Updated) ---
 st.title("🛠️ Maintenance Task Parser")
 
 st.markdown("Enter one or more maintenance descriptions, one per line:")
