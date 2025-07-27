@@ -31,16 +31,27 @@ PRIORITY_KEYWORDS = {
 # Extraction functions
 def extract_location(text):
     building = re.search(r'(building\s+[A-Z])', text, re.IGNORECASE)
-    room = re.search(r'(room\s*\d+)', text, re.IGNORECASE)
+    
+    # Match "room 205" or standalone numbers like "in 205" or "205" if no confusion
+    room = re.search(r'\b(room\s*\d+|\b\d{3}\b)', text, re.IGNORECASE)
+
     parts = []
     if building:
         parts.append(building.group(0))
     if room:
-        parts.append(room.group(0))
+        # Remove "room" prefix if needed for uniformity
+        room_number = re.search(r'\d{3}', room.group(0))
+        if room_number:
+            parts.append(f"Room {room_number.group(0)}")
     return " ".join(parts) if parts else None
 
 def extract_asset(text, task_type):
     lowered = text.lower()
+    
+    # Avoid numbers-only being picked up as asset
+    if lowered.strip().isdigit():
+        return None
+
     matched_assets = []
     category_keywords = TASK_CATEGORIES.get(task_type.lower(), [])
     for kw in category_keywords:
@@ -48,13 +59,15 @@ def extract_asset(text, task_type):
             matched_assets.append(kw)
     if matched_assets:
         return matched_assets[0]
+
     for keywords in TASK_CATEGORIES.values():
         for kw in keywords:
             if kw in lowered:
                 return kw
+
     doc = nlp(lowered)
     for token in doc:
-        if token.pos_ == 'NOUN':
+        if token.pos_ == 'NOUN' and not token.text.isdigit():
             return token.text
     return None
 
