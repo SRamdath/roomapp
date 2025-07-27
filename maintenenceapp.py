@@ -96,14 +96,20 @@ def parse_form(text):
     }
 
 # --- Streamlit Interface ---
-st.title("Maintenance Request Parser")
+# --- Streamlit Interface (Updated) ---
+st.title("🛠️ Maintenance Task Parser")
 
-user_input = st.text_area("Enter your maintenance request:")
+st.markdown("Enter one or more maintenance descriptions, one per line:")
+
+user_input = st.text_area("Task Descriptions", height=250)
 
 if st.button("Parse"):
-    if user_input.strip():
-        parsed = parse_form(user_input)
-        st.subheader("Parsed Output:")
-        st.json(parsed)
+    if not user_input.strip():
+        st.warning("Please enter at least one sentence.")
     else:
-        st.warning("Please enter a sentence to parse.")
+        st.subheader("Parsed Output:")
+        lines = [line.strip() for line in user_input.split('\n') if line.strip()]
+        for i, sentence in enumerate(lines, 1):
+            parsed = parse_form(sentence)
+            st.markdown(f"**Example {i}:** `{sentence}`")
+            st.json(parsed)
