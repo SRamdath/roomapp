@@ -40,7 +40,7 @@ PRIORITY_KEYWORDS = {
 }
 
 
-# helpers for holiday dates, because why not make your deadlines festive
+# helpers for holiday dates and festive deadlines
 def nth_weekday(year, month, weekday, n):
     first = date(year, month, 1)
     offset = (weekday - first.weekday() + 7) % 7
@@ -69,7 +69,7 @@ def get_holiday_date(name, year):
 
 def extract_location(text):
     lower = text.lower()
-    # pick up building letters, suite/ste numbers, rooms, floors, streets, halls, corridors, wings, walls, lobby
+    # pick up building letters, suite/ste numbers, rooms, floors, streets, halls, corridors, wings, walls, lobby, blah
     bldg     = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
     suite    = re.search(r'\b(?:suite|ste)\s*(\d+)\b',      text, re.IGNORECASE)
     room     = re.search(r'\b(room\s*\d+|\d{3})\b',         text, re.IGNORECASE)
@@ -251,7 +251,7 @@ def parse_form(text):
     }
 
 
-# main Streamlit interface
+# interface
 st.set_page_config(page_title="🛠️ Maintenance Task Parser", layout="wide")
 st.title("🛠️ Maintenance Task Parser")
 st.markdown("enter your maintenance notes, one per line:")
