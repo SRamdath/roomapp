@@ -24,7 +24,7 @@ TASK_CATEGORIES = {
     'general':    ['broken','fix','repair']
 }
 
-# too‑generic fallbacks
+# things too generic when a more specific asset exists
 GENERIC_ASSETS = {
     'broken','fix','repair','leak',
     'thing','unit','component','device','fixture',
@@ -35,45 +35,29 @@ GENERIC_ASSETS = {
 PRIORITY_KEYWORDS = {
     'high':   ['high priority','urgent','asap','immediately','emergency','critical','immediate attention','needs immediate attention'],
     'medium': ['medium priority','normal priority','soon','quick','needs attention'],
-    'low':    ['low priority','whenever','no rush','sometime','can wait','not a big deal','minor']
-}
-
-# week‑day mapping for date math
-WEEKDAYS = {
-    'monday':    0,
-    'tuesday':   1,
-    'wednesday': 2,
-    'thursday':  3,
-    'friday':    4,
-    'saturday':  5,
-    'sunday':    6
+    'low':    ['low priority','whenever','no rush','sometime','can wait']
 }
 
 
 ### HOLIDAY HELPERS ###
 
 def nth_weekday(year, month, weekday, n):
-    # e.g. 4th Thursday of November → nth_weekday(year, 11, 3, 4)
     first = date(year, month, 1)
-    first_wd = first.weekday()
-    days_until = (weekday - first_wd + 7) % 7
+    days_until = (weekday - first.weekday() + 7) % 7
     return first + timedelta(days=days_until + 7*(n-1))
 
 def last_weekday(year, month, weekday):
-    # e.g. last Monday of May → last_weekday(year, 5, 0)
     last_day = calendar.monthrange(year, month)[1]
     d = date(year, month, last_day)
     offset = (d.weekday() - weekday) % 7
     return d - timedelta(days=offset)
 
 def get_holiday_date(name, year):
-    # normalize name
-    nm = name.lower().replace("’","'").replace(".", "")
-    nm = re.sub(r"'s", "", nm).strip()
-
+    nm = name.lower().replace("’","'").replace(".", "").strip()
+    nm = re.sub(r"'s$", "", nm)
     if nm == "thanksgiving":
         return nth_weekday(year, 11, 3, 4)
-    if nm in ("christmas",):
+    if nm == "christmas":
         return date(year, 12, 25)
     if nm in ("new year day","new year"):
         return date(year, 1, 1)
@@ -95,7 +79,6 @@ def get_holiday_date(name, year):
 
 
 ### FUNCTIONS ###
-
 
 def extract_location(text):
     lowered   = text.lower()
@@ -163,7 +146,6 @@ def extract_asset(text, task_type):
 
 def extract_priority(text):
     lowered = text.lower()
-    # explicit low‑tones
     if re.search(r'\b(minor|not a big deal)\b', lowered):
         return "Low"
     if re.search(r'\bnot\s+(?:urgent|high priority|critical)\b', lowered):
@@ -182,36 +164,39 @@ def extract_priority(text):
 
 def extract_date(text):
     lowered = text.lower()
-    now = datetime.now()
-    # holiday detection
+    now     = datetime.now()
+
+    # 1) holiday
     hol = re.search(
-        r'\b(next\s+)?(thanksgiving|christmas|new year(?:\'s)? day|new year|valentine(?:’s|s) day|'
-        r'labor day|memorial day|president(?:s)? day|martin luther king jr\.? day|columbus day|veterans day)\b',
+        r'\b(next\s+)?(thanksgiving|christmas|new year(?:\'s)? day|new year|'
+        r'valentine(?:’s|s) day|labor day|memorial day|president(?:s)? day|'
+        r'martin luther king jr\.? day|columbus day|veterans day)\b',
         lowered
     )
     if hol:
         qualifier = hol.group(1)
-        name = hol.group(2)
-        year = now.year + 1 if qualifier else now.year
-        hd = get_holiday_date(name, year)
-        if not qualifier and hd < now.date():
-            hd = get_holiday_date(name, now.year+1)
+        name      = hol.group(2)
+        year      = now.year + (1 if qualifier else 0)
+        hd        = get_holiday_date(name, year)
+        if not qualifier and hd and hd < now.date():
+            hd = get_holiday_date(name, now.year + 1)
         if hd:
             return str(hd)
 
-    # only parse dates if text looks date‑like
+    # 2) only if date‑like
     if not re.search(
-        r'\b(?:by\s+)?(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|'
-        r'fri(?:day)?|sat(?:urday)?|sun(?:day)?|'
-        r'january|february|march|april|may|june|july|august|september|october|november|december|'
-        r'next|last|tomorrow|yesterday|\d+(?:st|nd|rd|th))\b',
+        r'\b(?:by\s+)?(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|'
+        r'thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|'
+        r'january|february|march|april|may|june|july|august|'
+        r'september|october|november|december|next|last|'
+        r'tomorrow|yesterday|\d+(?:st|nd|rd|th))\b',
         lowered
     ):
         return None
 
-    # explicit “15th of July”
+    # 3) “15th of July”
     month_names = [calendar.month_name[i] for i in range(1,13)]
-    exp = re.search(
+    exp         = re.search(
         rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
         text, re.IGNORECASE
     )
@@ -220,14 +205,14 @@ def extract_date(text):
         if p:
             return str(p.date())
 
-    # by <weekday>
+    # 4) “by Wednesday”
     by = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', lowered)
     if by:
-        base = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
+        base = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'})
         if base:
             return str(base.date())
 
-    # before next|last <weekday>
+    # 5) “before next/last Friday”
     bf = re.search(
         r'\bbefore\s+(next|last)\s+'
         r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
@@ -235,24 +220,26 @@ def extract_date(text):
     )
     if bf:
         qual, wd = bf.group(1), bf.group(2)
-        base = dateparser.parse(wd, settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
+        base     = dateparser.parse(wd, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'})
         if base:
-            delta = timedelta(days=7)
-            target = base + delta if qual=='next' else base - delta
+            delta  = timedelta(days=7)
+            target = base + delta if qual == 'next' else base - delta
             return str(target.date())
 
-    # SpaCy DATE ents
+    # 6) SpaCy DATE ents
     doc = nlp(text)
     for ent in doc.ents:
-        if ent.label_=='DATE' and 'other day' not in ent.text.lower():
+        if ent.label_ == 'DATE' and 'other day' not in ent.text.lower():
             p = dateparser.parse(ent.text, settings={'RELATIVE_BASE': now})
             if p:
                 return str(p.date())
 
-    # fuzzy fallback
-    for match, dt in search_dates(text, settings={'RELATIVE_BASE': now} or []):
-        if 'other day' not in match.lower():
-            return str(dt.date())
+    # 7) fuzzy fallback (guard against None)
+    results = search_dates(text, settings={'RELATIVE_BASE': now})
+    if results:
+        for match, dt in results:
+            if 'other day' not in match.lower():
+                return str(dt.date())
 
     return None
 
