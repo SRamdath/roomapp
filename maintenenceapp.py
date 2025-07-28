@@ -17,9 +17,9 @@ except OSError:
 
 # --- keyword lists ---
 TASK_CATEGORIES = {
-    'electrical': ['electrical','light','bulb','outlet','socket','switch','wire','wiring','cable'],
-    'plumbing':   ['leak','pipe','toilet','sink','faucet'],
-    'hvac':       ['ac','air conditioner','vent','cooling','heater'],
+    'electrical': ['electrical','light','lights','bulb','bulbs','outlet','socket','switch','wire','wiring','cable'],
+    'plumbing':   ['leak','pipe','pipes','toilet','sink','sinks','faucet'],
+    'hvac':       ['ac','air conditioner','vent','vents','cooling','heater','duct','ductwork'],
     'carpentry':  ['door','window','handle','frame','handrail'],
     'general':    ['broken','fix','repair']
 }
@@ -43,22 +43,25 @@ PRIORITY_KEYWORDS = {
 
 
 def extract_location(text):
-    lowered = text.lower()
-    bldg   = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
-    room   = re.search(r'\b(room\s*\d+|\d{3})\b',        text, re.IGNORECASE)
-    floor  = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
-    street = re.search(
+    lowered   = text.lower()
+    bldg      = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
+    room      = re.search(r'\b(room\s*\d+|\d{3})\b',        text, re.IGNORECASE)
+    floor     = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
+    street    = re.search(
         r'\bon\s+([A-Z][\w]*(?:\s+[A-Z][\w]*)*\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b',
         text
     )
-    hall   = re.search(r'\bresidence hall\b', text, re.IGNORECASE)
+    hall      = re.search(r'\bresidence hall\b', text, re.IGNORECASE)
+    corridor  = re.search(r'\bcorridor\s*(\d+)\b', lowered)
 
     parts = []
-    if bldg:   parts.append(bldg.group(0))
-    if room:   parts.append(room.group(0))
-    if floor:  parts.append(floor.group(0))
-    if street: parts.append(street.group(1))
-    if hall:   parts.append('residence hall')
+    if bldg:      parts.append(bldg.group(0))
+    if room:      parts.append(room.group(0))
+    if floor:     parts.append(floor.group(0))
+    if street:    parts.append(street.group(1))
+    if hall:      parts.append('residence hall')
+    if corridor:  parts.append(f"corridor {corridor.group(1)}")
+
     return " | ".join(parts) if parts else None
 
 
@@ -73,37 +76,38 @@ def extract_task_type(text):
 
 def extract_asset(text, task_type):
     lowered = text.lower()
-    cat_kws = TASK_CATEGORIES.get(task_type.lower(), [])
-    hits    = [(lowered.find(kw), kw) for kw in cat_kws if kw in lowered]
-
-    # if both generic + specific appear, drop generic
+    hits    = []
+    # 1) in‑category keywords (whole‑word)
+    for kw in TASK_CATEGORIES.get(task_type.lower(), []):
+        for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered):
+            hits.append((m.start(), kw))
+    # drop generic if others present
     if len(hits) > 1:
-        filtered = [(pos,kw) for pos,kw in hits if kw not in GENERIC_ASSETS]
-        if filtered:
-            hits = filtered
+        specific = [h for h in hits if h[1] not in GENERIC_ASSETS]
+        if specific:
+            hits = specific
     if hits:
         return min(hits, key=lambda x: x[0])[1]
 
-    # any category keyword
-    all_hits = [
-        (lowered.find(kw), kw)
-        for kws in TASK_CATEGORIES.values()
-        for kw in kws
-        if kw in lowered
-    ]
+    # 2) any category keyword
+    all_hits = []
+    for kws in TASK_CATEGORIES.values():
+        for kw in kws:
+            for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered):
+                all_hits.append((m.start(), kw))
     if len(all_hits) > 1:
-        filtered = [(pos,kw) for pos,kw in all_hits if kw not in GENERIC_ASSETS]
-        if filtered:
-            all_hits = filtered
+        specific = [h for h in all_hits if h[1] not in GENERIC_ASSETS]
+        if specific:
+            all_hits = specific
     if all_hits:
         return min(all_hits, key=lambda x: x[0])[1]
 
-    # fallback: first noun that's not generic
+    # 3) fallback: first non‑generic noun
     doc = nlp(text)
     for tok in doc:
         if tok.pos_ == 'NOUN' and tok.text.lower() not in GENERIC_ASSETS:
             return tok.text
-    # final fallback: any noun
+    # 4) any noun
     for tok in doc:
         if tok.pos_ == 'NOUN':
             return tok.text
@@ -140,6 +144,8 @@ def extract_date(text):
         return None
 
     now = datetime.now()
+
+    # explicit “15th of July”
     month_names = [calendar.month_name[i] for i in range(1,13)]
     exp_match   = re.search(
         rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
@@ -150,6 +156,7 @@ def extract_date(text):
         if p:
             return str(p.date())
 
+    # by <weekday> → upcoming
     by_match = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', lowered)
     if by_match:
         wd   = by_match.group(1)
@@ -157,18 +164,24 @@ def extract_date(text):
         if base:
             return str(base.date())
 
+    # before <next|last> <weekday>
     before_match = re.search(
-        r'\bbefore\s+(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+        r'\bbefore\s+(next|last)\s+'
+        r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
         lowered
     )
     if before_match:
-        is_next = bool(before_match.group(1))
-        wd      = before_match.group(2)
-        base    = dateparser.parse(wd, settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
+        qual = before_match.group(1)
+        wd   = before_match.group(2)
+        base = dateparser.parse(wd, settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
         if base:
-            target = base + timedelta(days=7) if is_next else base - timedelta(days=7)
+            if qual == 'next':
+                target = base + timedelta(days=7)
+            else:  # 'last'
+                target = base - timedelta(days=7)
             return str(target.date())
 
+    # SpaCy DATE ents
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == "DATE" and 'other day' not in ent.text.lower():
@@ -176,11 +189,13 @@ def extract_date(text):
             if p:
                 return str(p.date())
 
+    # fuzzy fallback
     results = search_dates(text, settings={'RELATIVE_BASE': now})
     if results:
         for match, dt in results:
             if 'other day' not in match.lower():
                 return str(dt.date())
+
     return None
 
 
