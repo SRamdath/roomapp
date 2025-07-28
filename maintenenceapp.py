@@ -28,7 +28,7 @@ TASK_CATEGORIES = {
     'general':    ['broken','fix','repair','generator']
 }
 
-# too-generic words to drop when something more specific is found
+# too generic words to drop when something more specific is found
 GENERIC_ASSETS = {
     'broken','fix','repair','leak','fluorescent',
     'thing','unit','component','device','fixture',
@@ -116,7 +116,7 @@ def extract_asset(text, task_type):
         if phrase in txt:
             return phrase
 
-    # door handle should stay intact
+    # door handle should stay intact (compound words)
     comp = re.search(r'\b(' + r'|'.join(map(re.escape, kws)) + r')\s+(' + r'|'.join(map(re.escape, kws)) + r')\b', txt)
     if comp:
         return f"{comp.group(1)} {comp.group(2)}"
@@ -154,7 +154,7 @@ def extract_asset(text, task_type):
 
 def extract_priority(text):
     txt = text.lower()
-    # only treat "emergency" as urgent when not part of the sign
+    # temporary fix for "emergency signs"
     if re.search(r'\bemergency\b(?!\s+exit)', txt):
         return "High"
     if re.search(r'\b(minor|not a big deal)\b', txt):
@@ -210,21 +210,21 @@ def extract_date(text):
         if p:
             return str(p.date())
 
-    # by <weekday>
+    # by weekday
     by = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if by:
         b = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if b:
             return str(b.date())
 
-    # after next <weekday>
+    # after next weekday
     aft = re.search(r'\bafter\s+next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if aft:
         w = dateparser.parse(aft.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if w:
             return str((w + timedelta(days=7)).date())
 
-    # before next/last <weekday>
+    # before next/last weekday
     bf = re.search(r'\bbefore\s+(next|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if bf:
         qual, wd = bf.group(1), bf.group(2)
