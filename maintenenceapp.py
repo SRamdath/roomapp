@@ -81,10 +81,11 @@ def extract_priority(text):
             return "Medium"
     # default
     return "Medium"
-
- def extract_date(text):
+    
+    
+    def extract_date(text):
     # 1) explicit “4th of July” style via calendar.month_name
-   month_names = [calendar.month_name[i] for i in range(1, 13)]
+    month_names = [calendar.month_name[i] for i in range(1, 13)]
     explicit = re.search(
         rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
         text, re.IGNORECASE
