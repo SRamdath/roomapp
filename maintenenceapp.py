@@ -23,7 +23,13 @@ TASK_CATEGORIES = {
     'general':    ['broken', 'fix', 'repair']
 }
 
-GENERIC_ASSETS = set(TASK_CATEGORIES['general'] + ['leak'])
+# things that are too generic to override a more specific keyword
+GENERIC_ASSETS = {
+    'broken', 'fix', 'repair', 'leak',
+    'thing', 'unit', 'component', 'device', 'fixture',
+    'system', 'apparatus', 'equipment', 'object', 'item',
+    'hardware', 'part'
+}
 
 PRIORITY_KEYWORDS = {
     'high':   ['high priority', 'urgent', 'asap', 'immediately', 'emergency', 'critical'],
@@ -51,12 +57,10 @@ def extract_location(text):
     room   = re.search(r'\b(room\s*\d+|\d{3})\b',        text, re.IGNORECASE)
     floor  = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
 
-    # non‑greedy capture of exactly the street name
     street = re.search(
         r'\bon\s+([A-Z][\w]*(?:\s+[A-Z][\w]*)*\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b',
         text
     )
-
     hall   = re.search(r'\bresidence hall\b', text, re.IGNORECASE)
 
     parts = []
@@ -79,10 +83,11 @@ def extract_task_type(text):
 
 
 def extract_asset(text, task_type):
-    lowered    = text.lower()
-    cat_kws    = TASK_CATEGORIES.get(task_type.lower(), [])
-    hits       = [(lowered.find(kw), kw) for kw in cat_kws if kw in lowered]
+    lowered  = text.lower()
+    cat_kws  = TASK_CATEGORIES.get(task_type.lower(), [])
+    hits     = [(lowered.find(kw), kw) for kw in cat_kws if kw in lowered]
 
+    # if both a generic and a specific appear, drop the generic
     if len(hits) > 1:
         filtered = [(pos,kw) for pos,kw in hits if kw not in GENERIC_ASSETS]
         if filtered:
@@ -105,6 +110,7 @@ def extract_asset(text, task_type):
     if all_hits:
         return min(all_hits, key=lambda x: x[0])[1]
 
+    # fallback: first noun
     doc = nlp(text)
     for tok in doc:
         if tok.pos_ == 'NOUN':
@@ -144,6 +150,7 @@ def extract_date(text):
 
     now = datetime.now()
 
+    # explicit “15th of July”
     month_names = [calendar.month_name[i] for i in range(1, 13)]
     exp_match   = re.search(
         rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
@@ -154,6 +161,7 @@ def extract_date(text):
         if p:
             return str(p.date())
 
+    # by <weekday> → this coming one
     by_match = re.search(
         r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
         lowered
@@ -164,6 +172,7 @@ def extract_date(text):
         if base:
             return str(base.date())
 
+    # before next <weekday> → weekday after next
     before_match = re.search(
         r'\bbefore\s+(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
         lowered
@@ -176,6 +185,7 @@ def extract_date(text):
             target = base + timedelta(days=7) if is_next else base - timedelta(days=7)
             return str(target.date())
 
+    # SpaCy DATE ents
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == "DATE" and 'other day' not in ent.text.lower():
@@ -183,6 +193,7 @@ def extract_date(text):
             if p:
                 return str(p.date())
 
+    # fuzzy fallback
     results = search_dates(text, settings={'RELATIVE_BASE': now})
     if results:
         for match, dt in results:
