@@ -1,19 +1,20 @@
 import streamlit as st
 import spacy
 import re
+import calendar
 import dateparser
 from dateparser.search import search_dates
 from datetime import datetime
 import spacy.cli
-import calendar
-# --- load SpaCy model ---
+
+# --- load SpaCy ---
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
-# --- definitions ---
+# --- keyword definitions ---
 TASK_CATEGORIES = {
     'electrical': ['light', 'bulb', 'outlet', 'socket', 'switch'],
     'plumbing':  ['leak', 'pipe', 'toilet', 'sink', 'faucet'],
@@ -28,15 +29,12 @@ PRIORITY_KEYWORDS = {
     'low':    ['low priority', 'whenever', 'no rush', 'sometime', 'can wait']
 }
 
-# --- extraction helpers ---
+# --- extraction functions ---
 def extract_location(text):
-    bldg = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
-    room = re.search(r'\b(room\s*\d+|\d{3})\b', text, re.IGNORECASE)
+    bldg  = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
+    room  = re.search(r'\b(room\s*\d+|\d{3})\b', text, re.IGNORECASE)
     floor = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
-    parts = []
-    for m in (bldg, room, floor):
-        if m:
-            parts.append(m.group(0))
+    parts = [m.group(0) for m in (bldg, room, floor) if m]
     return " | ".join(parts) if parts else None
 
 def extract_task_type(text):
@@ -49,16 +47,16 @@ def extract_task_type(text):
 
 def extract_asset(text, task_type):
     lowered = text.lower()
-    # first look in the task_type’s own keywords
+    # 1) In‑category keyword
     for kw in TASK_CATEGORIES.get(task_type.lower(), []):
         if re.search(rf'\b{re.escape(kw)}\b', lowered):
             return kw
-    # then any category keyword
+    # 2) Any category keyword
     for kws in TASK_CATEGORIES.values():
         for kw in kws:
             if re.search(rf'\b{re.escape(kw)}\b', lowered):
                 return kw
-    # fallback: first noun found
+    # 3) Fallback to first noun
     doc = nlp(text)
     for tok in doc:
         if tok.pos_ == 'NOUN':
@@ -67,36 +65,26 @@ def extract_asset(text, task_type):
 
 def extract_priority(text):
     lowered = text.lower()
-    # 1) explicit low
-    for kw in PRIORITY_KEYWORDS['low']:
-        if re.search(rf'\b{re.escape(kw)}\b', lowered):
-            return "Low"
-    # 2) explicit high
-    for kw in PRIORITY_KEYWORDS['high']:
-        if re.search(rf'\b{re.escape(kw)}\b', lowered):
-            return "High"
-    # 3) explicit medium
-    for kw in PRIORITY_KEYWORDS['medium']:
-        if re.search(rf'\b{re.escape(kw)}\b', lowered):
-            return "Medium"
-    # default
+    # low → high → medium precedence 
+    for level in ('low','high','medium'):
+        for kw in PRIORITY_KEYWORDS[level]:
+            if re.search(rf'\b{re.escape(kw)}\b', lowered):
+                return level.capitalize()
     return "Medium"
-    
-    
-    def extract_date(text):
-    # 1) explicit “4th of July” style via calendar.month_name
-    month_names = [calendar.month_name[i] for i in range(1, 13)]
+
+def extract_date(text):
+    # 1) explicit calendar date ("15th of July", "4 of July", etc.)
+    month_names = [calendar.month_name[i] for i in range(1,13)]
     explicit = re.search(
         rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
         text, re.IGNORECASE
-   )
+    )
+    if explicit:
+        p = dateparser.parse(explicit.group(0), settings={'RELATIVE_BASE': datetime.now()})
+        if p:
+            return str(p.date())
 
-     if explicit:
-         p = dateparser.parse(explicit.group(0), settings={'RELATIVE_BASE': datetime.now()})
-         if p:
-             return str(p.date())
-
-    # 2) SpaCy DATE ents (skip “other day”)
+    # 2) SpaCy DATE ents (skip "other day")
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == "DATE" and not re.search(r'\bother day\b', ent.text.lower()):
@@ -104,7 +92,7 @@ def extract_priority(text):
             if p:
                 return str(p.date())
 
-    # 3) fuzzy search_dates (again skip very vague)
+    # 3) fuzzy search_dates, again skip "other day"
     results = search_dates(text, settings={'RELATIVE_BASE': datetime.now()})
     if results:
         for match, dt in results:
