@@ -23,6 +23,9 @@ TASK_CATEGORIES = {
     'general':    ['broken', 'fix', 'repair']
 }
 
+# treat 'leak' as too‑generic when paired with something more specific
+GENERIC_ASSETS = set(TASK_CATEGORIES['general'] + ['leak'])
+
 
 PRIORITY_KEYWORDS = {
     'high':   ['high priority', 'urgent', 'asap', 'immediately', 'emergency', 'critical'],
@@ -47,11 +50,14 @@ WEEKDAYS = {
 
 def extract_location(text):
     lowered = text.lower()
-    bldg   = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b',        text, re.IGNORECASE)
-    room   = re.search(r'\b(room\s*\d+|\d{3})\b',                   text, re.IGNORECASE)
-    floor  = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b',          text, re.IGNORECASE)
-    street = re.search(r'\bon\s+([A-Z][\w\s]*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))', text)
-    hall   = re.search(r'\bresidence hall\b',                      lowered)
+    bldg   = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
+    room   = re.search(r'\b(room\s*\d+|\d{3})\b',        text, re.IGNORECASE)
+    floor  = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
+    street = re.search(
+        r'\bon\s+([A-Za-z][\w\s]*(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b',
+        text, re.IGNORECASE
+    )
+    hall   = re.search(r'\bresidence hall\b', text, re.IGNORECASE)
 
     parts = []
     if bldg:   parts.append(bldg.group(0))
@@ -73,35 +79,36 @@ def extract_task_type(text):
 
 
 def extract_asset(text, task_type):
-    lowered      = text.lower()
-    general_kws  = set(TASK_CATEGORIES['general'])
-    # 1) in‑category keywords with positions
-    cat_kws      = TASK_CATEGORIES.get(task_type.lower(), [])
-    hits         = [(lowered.find(kw), kw) for kw in cat_kws if kw in lowered]
+    lowered     = text.lower()
+    cat_kws     = TASK_CATEGORIES.get(task_type.lower(), [])
+    hits        = [(lowered.find(kw), kw) for kw in cat_kws if kw in lowered]
 
-    # if multiple, drop any general terms like "leak" so "leak in a pipe" picks "pipe"
+    # if both a generic term (like 'leak') and a specific one appear,
+    # drop the generic so 'leak in a pipe' → 'pipe'
     if len(hits) > 1:
-        filtered = [(pos,kw) for pos,kw in hits if kw not in general_kws]
+        filtered = [(pos,kw) for pos,kw in hits if kw not in GENERIC_ASSETS]
         if filtered:
             hits = filtered
 
     if hits:
         return min(hits, key=lambda x: x[0])[1]
 
-    # 2) any category keyword by earliest occurrence
-    all_hits = [(lowered.find(kw), kw)
-                for kws in TASK_CATEGORIES.values()
-                for kw in kws
-                if kw in lowered]
+    # then any category keyword
+    all_hits = [
+        (lowered.find(kw), kw)
+        for kws in TASK_CATEGORIES.values()
+        for kw in kws
+        if kw in lowered
+    ]
     if len(all_hits) > 1:
-        filtered = [(pos,kw) for pos,kw in all_hits if kw not in general_kws]
+        filtered = [(pos,kw) for pos,kw in all_hits if kw not in GENERIC_ASSETS]
         if filtered:
             all_hits = filtered
 
     if all_hits:
         return min(all_hits, key=lambda x: x[0])[1]
 
-    # 3) fallback to first noun
+    # fallback: first noun
     doc = nlp(text)
     for tok in doc:
         if tok.pos_ == 'NOUN':
@@ -112,14 +119,21 @@ def extract_asset(text, task_type):
 
 def extract_priority(text):
     lowered = text.lower()
+    # minor or casual down‑play → Low
+    if re.search(r'\bminor\b', lowered) or re.search(r'\bnot a big deal\b', lowered):
+        return "Low"
+    # "not urgent" → Low
     if re.search(r'\bnot\s+(?:urgent|high priority|critical)\b', lowered):
         return "Low"
+    # explicit Low
     for kw in PRIORITY_KEYWORDS['low']:
         if re.search(rf'\b{re.escape(kw)}\b', lowered):
             return "Low"
+    # explicit High
     for kw in PRIORITY_KEYWORDS['high']:
         if re.search(rf'\b{re.escape(kw)}\b', lowered):
             return "High"
+    # explicit Medium
     for kw in PRIORITY_KEYWORDS['medium']:
         if re.search(rf'\b{re.escape(kw)}\b', lowered):
             return "Medium"
@@ -128,11 +142,13 @@ def extract_priority(text):
 
 def extract_date(text):
     lowered = text.lower()
+    # only if there's something date‑like
     if not re.search(
         r'\b(?:by\s+)?(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|'
         r'fri(?:day)?|sat(?:urday)?|sun(?:day)?|'
         r'january|february|march|april|may|june|july|august|september|october|november|december|'
-        r'next|last|tomorrow|yesterday|\d+(?:st|nd|rd|th))\b', lowered
+        r'next|last|tomorrow|yesterday|\d+(?:st|nd|rd|th))\b',
+        lowered
     ):
         return None
 
@@ -149,15 +165,21 @@ def extract_date(text):
         if p:
             return str(p.date())
 
-    # by <weekday> → upcoming
-    by_match = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', lowered)
+    # by <weekday> → this coming one
+    by_match = re.search(
+        r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+        lowered
+    )
     if by_match:
-        wd = by_match.group(1)
-        base = dateparser.parse(wd, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'})
+        wd   = by_match.group(1)
+        base = dateparser.parse(
+            wd,
+            settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'}
+        )
         if base:
             return str(base.date())
 
-    # before next <weekday> → next week's
+    # before next <weekday> → weekday after next
     before_match = re.search(
         r'\bbefore\s+(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
         lowered
@@ -165,7 +187,10 @@ def extract_date(text):
     if before_match:
         is_next = bool(before_match.group(1))
         wd      = before_match.group(2)
-        base    = dateparser.parse(wd, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'})
+        base    = dateparser.parse(
+            wd,
+            settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM': 'future'}
+        )
         if base:
             target = base + timedelta(days=7) if is_next else base - timedelta(days=7)
             return str(target.date())
