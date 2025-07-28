@@ -2,8 +2,8 @@ import streamlit as st
 import spacy
 import re
 import dateparser
-from dateparser.search import search_dates
 import datetime
+from dateparser.search import search_dates
 
 import spacy.cli
 try:
@@ -11,8 +11,6 @@ try:
 except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
-
-nlp = spacy.load("en_core_web_sm")
 
 # Task and priority definitions
 TASK_CATEGORIES = {
@@ -32,79 +30,63 @@ PRIORITY_KEYWORDS = {
 # Extraction functions
 def extract_location(text):
     building = re.search(r'(building\s+[A-Z])', text, re.IGNORECASE)
-    
-    # Match "room 205" or standalone numbers like "in 205" or "205" if no confusion
-    room = re.search(r'\b(room\s*\d+|\b\d{3}\b)', text, re.IGNORECASE)
-
+    room = re.search(r'(room\s*\d+|\b\d{3,4}\b)', text, re.IGNORECASE)
     parts = []
     if building:
         parts.append(building.group(0))
     if room:
-        # Remove "room" prefix if needed for uniformity
-        room_number = re.search(r'\d{3}', room.group(0))
-        if room_number:
-            parts.append(f"Room {room_number.group(0)}")
+        parts.append(room.group(0))
     return " ".join(parts) if parts else None
 
 def extract_asset(text, task_type):
     lowered = text.lower()
-    
-    # Avoid numbers-only being picked up as asset
-    if lowered.strip().isdigit():
-        return None
-
     matched_assets = []
     category_keywords = TASK_CATEGORIES.get(task_type.lower(), [])
     for kw in category_keywords:
-        if kw in lowered:
+        if re.search(r'\b' + re.escape(kw) + r'\b', lowered):
             matched_assets.append(kw)
     if matched_assets:
         return matched_assets[0]
-
     for keywords in TASK_CATEGORIES.values():
         for kw in keywords:
-            if kw in lowered:
+            if re.search(r'\b' + re.escape(kw) + r'\b', lowered):
                 return kw
-
     doc = nlp(lowered)
     for token in doc:
-        if token.pos_ == 'NOUN' and not token.text.isdigit():
+        if token.pos_ == 'NOUN':
             return token.text
     return None
 
 def extract_task_type(text):
     lowered = text.lower()
-    priority_order = ['hvac', 'electrical', 'plumbing', 'carpentry', 'general']
-    for category in priority_order:
-        if any(kw in lowered for kw in TASK_CATEGORIES[category]):
-            return category.capitalize()
+    for category, keywords in TASK_CATEGORIES.items():
+        for kw in keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', lowered):
+                return category.capitalize()
     return "General"
 
 def extract_priority(text):
     lowered = text.lower()
+    if 'not urgent' in lowered or 'no rush' in lowered:
+        return 'Low'
     for level, keywords in PRIORITY_KEYWORDS.items():
-        if any(kw in lowered for kw in keywords):
-            return level.capitalize()
+        for kw in keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', lowered):
+                return level.capitalize()
     return "Medium"
 
 def extract_date(text):
-    text = text.strip()
     today = datetime.date.today()
-    
-    # First try: find relative clues
+    if "this month" in text.lower():
+        day_match = re.search(r'\b(\d{1,2})(st|nd|rd|th)?\s+this month\b', text.lower())
+        if day_match:
+            day = int(day_match.group(1))
+            return str(datetime.date(today.year, today.month, day))
+
     result = search_dates(text, settings={'RELATIVE_BASE': datetime.datetime.now()})
     if result:
-        for matched_text, parsed_dt in result:
-            if matched_text.lower() in ['wednesday', 'monday', 'tuesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                # Default to previous weekday if ambiguous
-                weekday_num = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].index(matched_text.lower())
-                days_ago = (today.weekday() - weekday_num) % 7 or 7
-                resolved_date = today - datetime.timedelta(days=days_ago)
-                return str(resolved_date)
-            else:
-                return str(parsed_dt.date())
-    
-    # Fallback: spaCy NER (less reliable for weekdays)
+        return str(result[0][1].date())
+
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == "DATE":
@@ -138,6 +120,9 @@ if st.button("Parse"):
         st.subheader("Parsed Output:")
         lines = [line.strip() for line in user_input.split('\n') if line.strip()]
         for i, sentence in enumerate(lines, 1):
+            parsed = parse_form(sentence)
+            st.markdown(f"**Example {i}:** `{sentence}`")
+            st.json(parsed)
             parsed = parse_form(sentence)
             st.markdown(f"**Example {i}:** `{sentence}`")
             st.json(parsed)
