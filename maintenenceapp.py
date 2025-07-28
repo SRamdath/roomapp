@@ -123,6 +123,3 @@ if st.button("Parse"):
             parsed = parse_form(sentence)
             st.markdown(f"**Example {i}:** `{sentence}`")
             st.json(parsed)
-            parsed = parse_form(sentence)
-            st.markdown(f"**Example {i}:** `{sentence}`")
-            st.json(parsed)
