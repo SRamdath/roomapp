@@ -24,7 +24,7 @@ TASK_CATEGORIES = {
     'general':    ['broken','fix','repair','generator']
 }
 
-# things too generic when a more specific asset exists
+# generic words to drop if something more specific appears
 GENERIC_ASSETS = {
     'broken','fix','repair','leak',
     'thing','unit','component','device','fixture',
@@ -35,7 +35,7 @@ GENERIC_ASSETS = {
 PRIORITY_KEYWORDS = {
     'high':   ['high priority','urgent','asap','immediately','emergency','critical','immediate attention','needs immediate attention'],
     'medium': ['medium priority','normal priority','soon','quick','needs attention'],
-    'low':    ['low priority','whenever','no rush','sometime','can wait']
+    'low':    ['low priority','whenever','no rush','sometime','can wait','minor','not a big deal']
 }
 
 
@@ -43,8 +43,8 @@ PRIORITY_KEYWORDS = {
 
 def nth_weekday(year, month, weekday, n):
     first = date(year, month, 1)
-    days_until = (weekday - first.weekday() + 7) % 7
-    return first + timedelta(days=days_until + 7*(n-1))
+    offset = (weekday - first.weekday() + 7) % 7
+    return first + timedelta(days=offset + 7*(n-1))
 
 def last_weekday(year, month, weekday):
     last_day = calendar.monthrange(year, month)[1]
@@ -83,14 +83,16 @@ def get_holiday_date(name, year):
 def extract_location(text):
     lowered   = text.lower()
     bldg      = re.search(r'\b(?:building|bldg\.?)\s*[A-Z]\b', text, re.IGNORECASE)
-    room      = re.search(r'\b(room\s*\d+|\d{3})\b',        text, re.IGNORECASE)
-    floor     = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
+    room      = re.search(r'\b(room\s*\d+|\d{3})\b',             text, re.IGNORECASE)
+    floor     = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b',    text, re.IGNORECASE)
     street    = re.search(
         r'\bon\s+([A-Z][\w]*(?:\s+[A-Z][\w]*)*\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b',
         text
     )
-    hall      = re.search(r'\bresidence hall\b', text, re.IGNORECASE)
-    corridor  = re.search(r'\bcorridor\s*(\d+)\b', lowered)
+    hall      = re.search(r'\bresidence hall\b',                 text, re.IGNORECASE)
+    corridor  = re.search(r'\bcorridor\s*(\d+)\b',               lowered)
+    wing      = re.search(r'\b(north|south|east|west)\s+wing\b', lowered)
+    mezz      = re.search(r'\bmezzanine\b',                      lowered)
 
     parts = []
     if bldg:     parts.append(bldg.group(0))
@@ -99,6 +101,8 @@ def extract_location(text):
     if street:   parts.append(street.group(1))
     if hall:     parts.append('residence hall')
     if corridor: parts.append(f"corridor {corridor.group(1)}")
+    if wing:     parts.append(f"{wing.group(1)} wing")
+    if mezz:     parts.append('mezzanine')
     return " | ".join(parts) if parts else None
 
 
@@ -112,25 +116,29 @@ def extract_task_type(text):
 
 
 def extract_asset(text, task_type):
-    lowered  = text.lower()
-    hits     = [(m.start(), kw)
-                for kw in TASK_CATEGORIES.get(task_type.lower(), [])
-                for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered)]
+    lowered = text.lower()
+    hits = [
+        (m.start(), kw)
+        for kw in TASK_CATEGORIES.get(task_type.lower(), [])
+        for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered)
+    ]
     if len(hits) > 1:
-        spec = [h for h in hits if h[1] not in GENERIC_ASSETS]
-        if spec:
-            hits = spec
+        specific = [h for h in hits if h[1] not in GENERIC_ASSETS]
+        if specific:
+            hits = specific
     if hits:
         return min(hits, key=lambda x: x[0])[1]
 
-    all_hits = [(m.start(), kw)
-                for kws in TASK_CATEGORIES.values()
-                for kw in kws
-                for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered)]
+    all_hits = [
+        (m.start(), kw)
+        for kws in TASK_CATEGORIES.values()
+        for kw in kws
+        for m in re.finditer(rf'\b{re.escape(kw)}\b', lowered)
+    ]
     if len(all_hits) > 1:
-        spec = [h for h in all_hits if h[1] not in GENERIC_ASSETS]
-        if spec:
-            all_hits = spec
+        specific = [h for h in all_hits if h[1] not in GENERIC_ASSETS]
+        if specific:
+            all_hits = specific
     if all_hits:
         return min(all_hits, key=lambda x: x[0])[1]
 
@@ -166,10 +174,9 @@ def extract_date(text):
     lowered = text.lower()
     now     = datetime.now()
 
-    # 1) "end of this month"
+    # 1) end of this month
     if re.search(r'\bend of (?:this|current) month\b', lowered):
-        y = now.year
-        m = now.month
+        y, m = now.year, now.month
         last_day = calendar.monthrange(y, m)[1]
         return str(date(y, m, last_day))
 
@@ -181,11 +188,11 @@ def extract_date(text):
         lowered
     )
     if hol:
-        qualifier = hol.group(1)
-        name      = hol.group(2)
-        year      = now.year + (1 if qualifier else 0)
-        hd        = get_holiday_date(name, year)
-        if not qualifier and hd and hd < now.date():
+        qual = hol.group(1)
+        name = hol.group(2)
+        yr   = now.year + (1 if qual else 0)
+        hd   = get_holiday_date(name, yr)
+        if not qual and hd and hd < now.date():
             hd = get_holiday_date(name, now.year+1)
         if hd:
             return str(hd)
@@ -194,7 +201,7 @@ def extract_date(text):
     if not re.search(
         r'\b(?:by\s+)?(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|'
         r'thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|'
-        r'january|february|march|april|may|june|july|august|'
+        r'january|february|month|march|april|may|june|july|august|'
         r'september|october|november|december|next|last|'
         r'tomorrow|yesterday|\d+(?:st|nd|rd|th))\b',
         lowered
@@ -202,46 +209,54 @@ def extract_date(text):
         return None
 
     # 4) “15th of July”
-    month_names = [calendar.month_name[i] for i in range(1,13)]
-    exp         = re.search(
-        rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(month_names)})\b',
+    mn = [calendar.month_name[i] for i in range(1,13)]
+    exp = re.search(
+        rf'\b(\d{{1,2}})(?:st|nd|rd|th)?(?:\s+of)?\s+({"|".join(mn)})\b',
         text, re.IGNORECASE
     )
     if exp:
-        p = dateparser.parse(exp.group(0), settings={'RELATIVE_BASE': now})
+        p = dateparser.parse(exp.group(0), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if p:
             return str(p.date())
 
     # 5) “by Wednesday”
     by = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', lowered)
     if by:
-        base = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
+        base = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if base:
             return str(base.date())
 
-    # 6) “before next/last Friday”
+    # 6) “after next Wednesday” or “next Wednesday”
+    aft = re.search(r'\bafter\s+next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', lowered)
+    if aft:
+        wd   = aft.group(1)
+        base = dateparser.parse(wd, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
+        if base:
+            # interpret “after next Wed” as the Wednesday after upcoming one
+            return str((base + timedelta(days=7)).date())
+
+    # 7) “before next/last Friday”
     bf = re.search(
-        rf'\bbefore\s+(next|last)\s+'
-        rf'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+        r'\bbefore\s+(next|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
         lowered
     )
     if bf:
         qual, wd = bf.group(1), bf.group(2)
-        base     = dateparser.parse(wd, settings={'RELATIVE_BASE': now,'PREFER_DATES_FROM':'future'})
+        base     = dateparser.parse(wd, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if base:
             delta  = timedelta(days=7)
-            target = base + delta if qual=='next' else base - delta
+            target = base + delta if qual == 'next' else base - delta
             return str(target.date())
 
-    # 7) SpaCy DATE ents
+    # 8) SpaCy DATE ents (prefer future)
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == 'DATE' and 'other day' not in ent.text.lower():
-            p = dateparser.parse(ent.text, settings={'RELATIVE_BASE': now})
+            p = dateparser.parse(ent.text, settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
             if p:
                 return str(p.date())
 
-    # 8) fuzzy fallback
+    # 9) fuzzy fallback
     results = search_dates(text, settings={'RELATIVE_BASE': now})
     if results:
         for match, dt in results:
