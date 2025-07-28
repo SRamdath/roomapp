@@ -7,14 +7,14 @@ from dateparser.search import search_dates
 from datetime import datetime, timedelta, date
 import spacy.cli
 
-# load SpaCy model and grab it if you don't have it
+# load SpaCy model (grab it if you don't have it)
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
     spacy.cli.download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
 
-# what categories we know and what words hint at them
+# task categories and hint words
 TASK_CATEGORIES = {
     'electrical': [
         'emergency exit sign', 'exit sign',
@@ -28,7 +28,7 @@ TASK_CATEGORIES = {
     'general':    ['broken','fix','repair','generator']
 }
 
-# way-too-vague words to drop if something more specific shows up
+# too-generic words to drop when something more specific is found
 GENERIC_ASSETS = {
     'broken','fix','repair','leak','fluorescent',
     'thing','unit','component','device','fixture',
@@ -36,17 +36,14 @@ GENERIC_ASSETS = {
     'hardware','part'
 }
 
+# priority keywords
 PRIORITY_KEYWORDS = {
-    'high':   [
-        'high priority','urgent','asap','immediately',
-        'emergency','critical','immediate attention',
-        'needs immediate attention'
-    ],
+    'high':   ['high priority','urgent','asap','immediately','emergency','critical','immediate attention'],
     'medium': ['medium priority','normal priority','soon','quick','needs attention'],
     'low':    ['low priority','whenever','no rush','sometime','can wait','minor','not a big deal']
 }
 
-# helpers for holiday deadlines (keep it fun)
+# holiday helpers (festive deadlines)
 def nth_weekday(year, month, weekday, n):
     first = date(year, month, 1)
     offset = (weekday - first.weekday() + 7) % 7
@@ -79,10 +76,7 @@ def extract_location(text):
     room     = re.search(r'\b(room\s*\d+|\d{3})\b',         text, re.IGNORECASE)
     floor    = re.search(r'\b\d+(?:st|nd|rd|th)?\s+floor\b', text, re.IGNORECASE)
     stair    = re.search(r'\bstairs?\s*(\d+)\b',            lower)
-    street   = re.search(
-        r'\bon\s+([A-Z][\w\s]*?(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b',
-        text
-    )
+    street   = re.search(r'\bon\s+([A-Z][\w\s]*?(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?))\b', text)
     elevator = re.search(r'\bnear\s+the\s+([\w\s]+?elevator)\b', lower)
     hall     = re.search(r'\bresidence hall\b',             lower)
     corridor = re.search(r'\bcorridor\s*(\d+)\b',           lower)
@@ -117,17 +111,17 @@ def extract_asset(text, task_type):
     txt = text.lower()
     kws = TASK_CATEGORIES.get(task_type.lower(), [])
 
-    # 1) multi-word assets have top priority
+    # multi-word assets first
     for phrase in ['emergency exit sign', 'exit sign']:
         if phrase in txt:
             return phrase
 
-    # 2) compound like "door handle" should stick together
+    # door handle should stay intact
     comp = re.search(r'\b(' + r'|'.join(map(re.escape, kws)) + r')\s+(' + r'|'.join(map(re.escape, kws)) + r')\b', txt)
     if comp:
         return f"{comp.group(1)} {comp.group(2)}"
 
-    # 3) then earliest specific keyword
+    # earliest specific keyword
     hits = [(m.start(), kw) for kw in kws for m in re.finditer(rf'\b{re.escape(kw)}\b', txt)]
     if len(hits) > 1:
         spec = [h for h in hits if h[1] not in GENERIC_ASSETS]
@@ -136,13 +130,11 @@ def extract_asset(text, task_type):
     if hits:
         return min(hits, key=lambda x: x[0])[1]
 
-    # 4) fallback to any category keyword
-    all_hits = [
-        (m.start(), kw)
-        for cat in TASK_CATEGORIES.values()
-        for kw in cat
-        for m in re.finditer(rf'\b{re.escape(kw)}\b', txt)
-    ]
+    # fallback to any category keyword
+    all_hits = [(m.start(), kw)
+                for cat in TASK_CATEGORIES.values()
+                for kw in cat
+                for m in re.finditer(rf'\b{re.escape(kw)}\b', txt)]
     if len(all_hits) > 1:
         spec = [h for h in all_hits if h[1] not in GENERIC_ASSETS]
         if spec:
@@ -150,7 +142,7 @@ def extract_asset(text, task_type):
     if all_hits:
         return min(all_hits, key=lambda x: x[0])[1]
 
-    # 5) final fallback: first decent noun
+    # final fallback: first decent noun
     doc = nlp(text)
     for tok in doc:
         if tok.pos_ == 'NOUN' and tok.text.lower() not in GENERIC_ASSETS:
@@ -162,7 +154,7 @@ def extract_asset(text, task_type):
 
 def extract_priority(text):
     txt = text.lower()
-    # "emergency" only counts as urgent if not part of the sign phrase
+    # only treat "emergency" as urgent when not part of the sign
     if re.search(r'\bemergency\b(?!\s+exit)', txt):
         return "High"
     if re.search(r'\b(minor|not a big deal)\b', txt):
@@ -179,13 +171,13 @@ def extract_date(text):
     txt = text.lower()
     now = datetime.now()
 
-    # end-of-month deadlines
+    # end-of-month
     if re.search(r'\bend of (?:this|current) month\b', txt):
         y, m = now.year, now.month
         last = calendar.monthrange(y, m)[1]
         return str(date(y, m, last))
 
-    # festive holiday deadlines
+    # holiday deadlines
     hol = re.search(
         r'\b(next\s+)?(thanksgiving|christmas|new year(?:\'s)? day|new year|'
         r'valentine(?:’s|s) day|labor day|memorial day|president(?:s)? day|'
@@ -200,7 +192,7 @@ def extract_date(text):
         if hd:
             return str(hd)
 
-    # bail if no date hints at all
+    # skip unless date-like hint present
     if not re.search(
         r'\b(?:by\s+)?(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|'
         r'thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|'
@@ -210,30 +202,29 @@ def extract_date(text):
     ):
         return None
 
-    # ordinals + month parsing
+    # ordinals + months
     mn = [calendar.month_name[i] for i in range(1, 13)]
-    exp = re.search(rf'\b(\d{{1,2}})(?:st|nd|rd|th)(?:\s+of)?\s+({"|".join(mn)})\b',
-                    text, re.IGNORECASE)
+    exp = re.search(rf'\b(\d{{1,2}})(?:st|nd|rd|th)(?:\s+of)?\s+({"|".join(mn)})\b', text, re.IGNORECASE)
     if exp:
         p = dateparser.parse(exp.group(0), settings={'RELATIVE_BASE': now})
         if p:
             return str(p.date())
 
-    # "by <weekday>" → next one
+    # by <weekday>
     by = re.search(r'\bby\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if by:
         b = dateparser.parse(by.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if b:
             return str(b.date())
 
-    # "after next <weekday>" → week after next
+    # after next <weekday>
     aft = re.search(r'\bafter\s+next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if aft:
         w = dateparser.parse(aft.group(1), settings={'RELATIVE_BASE': now, 'PREFER_DATES_FROM':'future'})
         if w:
             return str((w + timedelta(days=7)).date())
 
-    # "before next/last <weekday>"
+    # before next/last <weekday>
     bf = re.search(r'\bbefore\s+(next|last)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', txt)
     if bf:
         qual, wd = bf.group(1), bf.group(2)
@@ -242,7 +233,7 @@ def extract_date(text):
             delta = timedelta(days=7)
             return str((base + delta if qual=='next' else base - delta).date())
 
-    # fallback to SpaCy's date ents
+    # SpaCy date ents
     doc = nlp(text)
     for ent in doc.ents:
         if ent.label_ == 'DATE' and 'other day' not in ent.text.lower():
@@ -250,7 +241,7 @@ def extract_date(text):
             if p:
                 return str(p.date())
 
-    # last resort fuzzy search
+    # fuzzy fallback
     results = search_dates(text, settings={'RELATIVE_BASE': now})
     if results:
         for m, dt in results:
@@ -269,7 +260,7 @@ def parse_form(text):
         'date':      extract_date(text)
     }
 
-# main UI
+# Streamlit UI
 st.set_page_config(page_title="🛠️ Maintenance Task Parser", layout="wide")
 st.title("🛠️ Maintenance Task Parser")
 st.markdown("enter your maintenance notes, one per line:")
@@ -282,9 +273,6 @@ if st.button("parse"):
         st.subheader("parsed output:")
         lines = [l.strip() for l in user_input.splitlines() if l.strip()]
         for i, line in enumerate(lines, 1):
-            result = parse_form(line)
-            st.markdown(f"• **{i}.** `{line}`")
-            st.json(result)
             result = parse_form(line)
             st.markdown(f"• **{i}.** `{line}`")
             st.json(result)
