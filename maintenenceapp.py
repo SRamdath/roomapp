@@ -7,7 +7,7 @@ from dateparser.search import search_dates
 from datetime import datetime, timedelta, date
 import spacy.cli
 
-# load SpaCy model (grab it if you don't have it)
+# load SpaCy
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
